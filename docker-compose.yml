@@ -1,0 +1,22 @@
+name: apse-project
+
+services:
+  mqtt_broker:
+    build:
+      context: ./mqtt
+      dockerfile: Dockerfile
+      args:
+        - BROKER_USERNAME=${BROKER_USERNAME}
+        - BROKER_PASSWORD=${BROKER_PASSWORD}
+    container_name: mqtt_broker
+    ports:
+    - "1883:1883"
+    volumes:
+      - mqtt_data:/mqtt/data
+      - mqtt_log:/mqtt/log
+    env_file:
+      - .env
+
+volumes:
+  mqtt_data:
+  mqtt_log:
