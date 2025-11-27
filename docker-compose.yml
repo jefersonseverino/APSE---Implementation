@@ -1,7 +1,7 @@
 name: apse-project
 
 services:
-  mqtt_broker:
+  mqtt_broker_embedded:
     build:
       context: ./mqtt
       dockerfile: Dockerfile
