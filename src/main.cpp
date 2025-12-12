@@ -48,6 +48,7 @@ EstadoSinal ultimoVerde = S1_VERDE;
 
 unsigned long tempoUltimaTroca = 0;
 unsigned long tempoUltimaPublicacao = 0;
+bool pedestreAtivo = false;
 
 int trafegoA = 0;
 int trafegoB = 0;
@@ -129,7 +130,6 @@ void setup() {
   client.setServer(mqtt_server, 1883);
   updateSensorInformation();
   
-  // Decide inicial
   if (trafegoA > trafegoB) { mudarPara(S1_VERDE); ultimoVerde = S1_VERDE; }
   else { mudarPara(S2_VERDE); ultimoVerde = S2_VERDE; }
 }
@@ -138,34 +138,31 @@ void loop() {
   if (!client.connected()) reconnect();
   client.loop(); 
   unsigned long agora = millis();
-  
+
   bool pedestreEmS1 = digitalRead(PIN_BTN_S1) == LOW; 
   bool pedestreEmS2 = digitalRead(PIN_BTN_S2) == LOW; 
   if (pedestreEmS1) Serial.println("DEBUG: Btn S1");
   if (pedestreEmS2) Serial.println("DEBUG: Btn S2");
 
   switch (estadoAtual) {
-    
-    // === SINAL 1 VERDE ===
     case S1_VERDE:
       if (pedestreEmS1) {
          Serial.println("Pedestre S1 -> Amarelo");
          delay(1000); 
-         ultimoVerde = S1_VERDE; // Memoriza quem estava verde
+         ultimoVerde = S1_VERDE;
+         pedestreAtivo = true;
          mudarPara(S1_AMARELO, true);
       }
       else {
          updateSensorInformation();
          long tempoLimite = calcularTempoVerde(trafegoA);
 
-         // Lógica Anti-Starvation na Saída do Verde
          if (agora - tempoUltimaTroca >= tempoLimite) {
              if (trafegoB > 0) {
                  Serial.println("Tempo S1 acabou. S2 tem fila. Trocando.");
                  ultimoVerde = S1_VERDE; // Memoriza
                  mudarPara(S1_AMARELO, false);
              } 
-             // Se S2 vazio, mantém S1
          }
       }
       break;
@@ -182,6 +179,7 @@ void loop() {
          Serial.println("Pedestre S2 -> Amarelo");
          delay(1000); 
          ultimoVerde = S2_VERDE; // Memoriza quem estava verde
+         pedestreAtivo = true;
          mudarPara(S2_AMARELO, true);
       }
       else {
@@ -195,7 +193,6 @@ void loop() {
                  ultimoVerde = S2_VERDE; // Memoriza
                  mudarPara(S2_AMARELO, false);
              }
-             // Se S1 vazio, mantém S2
          }
       }
       break;
@@ -204,18 +201,19 @@ void loop() {
       if (agora - tempoUltimaTroca >= TEMPO_AMARELO) mudarPara(VERMELHO_PEDESTRE);
       break;
 
-    // === MODO PEDESTRE (RETORNO ANTI-STARVATION) ===
     case VERMELHO_PEDESTRE:
       if (agora - tempoUltimaTroca >= TEMPO_PEDESTRE) {
         updateSensorInformation(); 
         Serial.println("Fim do Vermelho Total. Decidindo...");
 
-        // AQUI ESTÁ A CORREÇÃO SOLICITADA:
-        // Não compara mais densidade (trafegoA > trafegoB).
-        // Apenas verifica quem foi o último e passa a vez (se o próximo tiver carros).
-
         if (ultimoVerde == S1_VERDE) {
-            // A vez seria do S2.
+            if (pedestreAtivo) {
+                Serial.println("Pedestre recente em S1. Mantém S1.");
+                mudarPara(S1_VERDE, true);
+                pedestreAtivo = false; 
+                return;
+            }
+
             if (trafegoB > 0) {
                 Serial.println("Vez do S2 (Rotação).");
                 mudarPara(S2_VERDE);
@@ -224,9 +222,15 @@ void loop() {
                 mudarPara(S1_VERDE);
             }
         } 
-        else { // ultimoVerde == S2_VERDE
-            // A vez seria do S1.
-            if (trafegoA > 0) {
+        else {
+          if (pedestreAtivo) {
+                Serial.println("Pedestre recente em S2. Mantém S2.");
+                mudarPara(S2_VERDE, true);
+                pedestreAtivo = false; 
+                return;
+            }
+          
+          if (trafegoA > 0) {
                 Serial.println("Vez do S1 (Rotação).");
                 mudarPara(S1_VERDE);
             } else {
