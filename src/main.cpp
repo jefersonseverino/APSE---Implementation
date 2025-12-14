@@ -6,7 +6,6 @@
 
 #define WDT_TIMEOUT 20
 
-// --- CONFIGURAÇÕES DE REDE ---
 const char *ssid = "";
 const char *password = "";
 const char *mqtt_server = "";
@@ -197,13 +196,11 @@ void loop() {
   
   unsigned long timeNow = millis();
   
-  // REMOVIDO: delay(1000) de debounce e anti-starvation para evitar travamento do WDT
   bool pedestreEmS1 = digitalRead(PIN_BTN_S1) == LOW; 
   bool pedestreEmS2 = digitalRead(PIN_BTN_S2) == LOW; 
 
   switch (estadoAtual) {
     case S1_VERDE:
-      // Ação de Pedestre (Anti-debounce usando tempo)
       if (pedestreEmS1 && (timeNow - lastPedestrePressTime > 10000)) {
          ultimoVerde = S1_VERDE;
          pedestreAtivo = true;
@@ -212,8 +209,6 @@ void loop() {
       } else {
          updateSensorInformation();
          long tempoLimite = calcularTempoVerde(trafegoA);
-         Serial.printf("S1 VERDE. Tráfego: %d. Limite: %ldms\n", trafegoA, tempoLimite);
-         // carCounter += trafegoA; // REMOVIDO: Contagem feita por ISR
          if (timeNow - tempoUltimaTroca >= tempoLimite) {
              if (trafegoB > 0) {
                  ultimoVerde = S1_VERDE; 
@@ -230,7 +225,6 @@ void loop() {
       break;
 
     case S2_VERDE:
-      // Ação de Pedestre (Anti-debounce usando tempo)
       if (pedestreEmS2 && (timeNow - lastPedestrePressTime > 10000)) {
          Serial.println("Pedestre S2 -> Amarelo");
          ultimoVerde = S2_VERDE; 
@@ -241,8 +235,6 @@ void loop() {
       else {
          updateSensorInformation();
          long tempoLimite = calcularTempoVerde(trafegoB);
-         Serial.printf("S2 VERDE. Tráfego: %d. Limite: %ldms\n", trafegoB, tempoLimite);
-         // carCounter += trafegoB; // REMOVIDO: Contagem feita por ISR
          if (timeNow - tempoUltimaTroca >= tempoLimite) {
              if (trafegoA > 0) {
                  Serial.println("Tempo S2 acabou. S1 tem fila. Trocando.");
@@ -262,7 +254,6 @@ void loop() {
         updateSensorInformation(); 
         Serial.println("Fim do Vermelho Total. Decidindo...");
 
-        // Lógica de Anti-Starvation e Prioridade de Pedestre
         if (pedestreAtivo) {
             EstadoSinal proximoEstado = (ultimoVerde == S1_VERDE) ? S1_VERDE : S2_VERDE;
             Serial.printf("Pedestre recente em S%d. Mantém Verde.\n", (proximoEstado == S1_VERDE ? 1 : 2));
@@ -271,7 +262,6 @@ void loop() {
             return;
         }
 
-        // Se S1 foi o último, é a vez de S2
         if (ultimoVerde == S1_VERDE) {
             if (trafegoB > 0) {
                 Serial.println("Vez do S2 (Rotação).");
@@ -281,7 +271,6 @@ void loop() {
                 mudarPara(S1_VERDE);
             }
         } 
-        // Se S2 foi o último, é a vez de S1
         else {
           if (trafegoA > 0) {
                 Serial.println("Vez do S1 (Rotação).");
