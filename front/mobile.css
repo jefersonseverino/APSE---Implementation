@@ -1,0 +1,108 @@
+@media (max-width: 768px) {
+    
+    main {
+        grid-template-columns: 1fr;
+        padding: 10px;
+        gap: 10px;
+        overflow-y: auto;
+    }
+
+    .content-left {
+        overflow-y: visible;
+        gap: 10px;
+    }
+
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 10px 20px;
+    }
+
+    .logo-area {
+        margin-bottom: 10px;
+    }
+
+    .report-panel {
+        padding: 15px;
+    }
+
+    .report-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .rep-item {
+        padding: 8px;
+    }
+    
+    .rep-item label {
+        font-size: 0.8rem;
+    }
+
+    .rep-item span {
+        font-size: 1.1rem;
+    }
+    
+    .btn-export {
+        width: 100%;
+        margin-top: 10px;
+    }
+
+    .traffic-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    
+    .road-card {
+        padding: 15px;
+    }
+    
+    .road-name {
+        font-size: 1rem;
+    }
+
+    .traffic-ui {
+        justify-content: space-between;
+    }
+
+    .tl-box {
+        padding: 8px;
+        border-radius: 20px;
+    }
+
+    .light {
+        width: 25px;
+        height: 25px;
+    }
+    
+    .status-text {
+        font-size: 1.2rem;
+        min-width: 80px;
+    }
+
+    /* GRÁFICO */
+    .chart-container {
+        padding: 10px;
+        min-height: 300px;
+    }
+    
+    #mainChart {
+        height: 280px !important; 
+    }
+
+    .log-sidebar {
+        border-left: none;
+        border-top: 1px solid #ddd;
+        order: 3; 
+    }
+    
+    .log-header {
+        font-size: 1rem;
+        padding: 10px 15px;
+    }
+    
+    #log-list {
+        max-height: 300px;
+    }
+
+}

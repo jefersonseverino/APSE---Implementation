@@ -1,6 +1,5 @@
-// --- CONFIGURAÇÕES ---
 const BROKER_URL = 'ws://localhost:9001';
-const TOPIC = 'teste/arduino';
+const TOPIC = 'dashboard/traffic_control';
 
 const options = {
     username: 'user',     
@@ -8,7 +7,6 @@ const options = {
     keepalive: 60
 };
 
-// Mapa de Cores para o Fluxo (Texto)
 const flowColors = {
     'LIVRE': '#2ecc71',     // Verde
     'LEVE': '#2ecc71',      // Verde
@@ -17,10 +15,8 @@ const flowColors = {
     'PARE': '#e74c3c'       // Vermelho (para estado de parada)
 };
 
-// Variáveis de Estatística
 let stats = { total: 0, intense: 0, amb: 0, ped: 0, peakTime: '--:--' };
 
-// Variável para evitar contagem múltipla do botão
 let estadoPedestreAnterior = false; 
 
 // --- INICIALIZAÇÃO DO GRÁFICO ---
@@ -71,7 +67,6 @@ let mainChart = new Chart(ctx, {
 const client = mqtt.connect(BROKER_URL, options);
 
 client.on('connect', () => {
-    console.log("✅ Conectado ao Broker!");
     const statusEl = document.getElementById('mqtt-status');
     statusEl.innerHTML = '<i class="fas fa-circle" style="font-size: 8px;"></i> OPERACIONAL - COP RECIFE';
     statusEl.style.color = "#2ecc71"; // Verde
@@ -81,7 +76,6 @@ client.on('connect', () => {
 client.on('message', (topic, message) => {
     try {
         const data = JSON.parse(message.toString());
-        // requestAnimationFrame garante sincronia com a taxa de atualização do monitor
         requestAnimationFrame(() => {
             updateUI(data);
             processIntelligence(data);
@@ -91,12 +85,10 @@ client.on('message', (topic, message) => {
     }
 });
 
-// --- FUNÇÕES DE ATUALIZAÇÃO ---
 function updateUI(data) {
     const s1Status = document.getElementById('s1-status');
     const s2Status = document.getElementById('s2-status');
 
-    // 1. ATUALIZAÇÃO DAS LUZES (Visual do Semáforo)
     resetLights(); // Apaga tudo antes de acender o correto
 
     if(data.estado.includes('S1_VERDE')) { 
@@ -116,17 +108,13 @@ function updateUI(data) {
         setActive('s1', 'r'); setActive('s2', 'r'); 
     }
 
-    // 2. ATUALIZAÇÃO DOS TEXTOS DE STATUS
     if (data.estado.includes('S1')) {
-        // S1 Aberto
         updateText(s1Status, data.transito, flowColors[data.transito]);
         updateText(s2Status, "AGUARDANDO", "#95a5a6");
     } else if (data.estado.includes('S2')) {
-        // S2 Aberto
         updateText(s2Status, data.transito, flowColors[data.transito]);
         updateText(s1Status, "AGUARDANDO", "#95a5a6");
     } else {
-        // Tudo Vermelho (Modo Pedestre)
         updateText(s1Status, "PARE (PEDESTRE)", "#e74c3c");
         updateText(s2Status, "PARE (PEDESTRE)", "#e74c3c");
     }
@@ -162,8 +150,8 @@ function processIntelligence(data) {
     estadoPedestreAnterior = data.pedestre; 
     // --------------------------------------------------------
 
-    if (data.ambulancia) stats.amb++;
-    
+    stats.amb = data.carros_total;
+
     if (data.transito === 'INTENSO') {
         stats.intense++;
         stats.peakTime = new Date().toLocaleTimeString().substring(0,5);

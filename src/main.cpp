@@ -2,6 +2,9 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include <esp_task_wdt.h>
+
+#define WDT_TIMEOUT 20
 
 // --- CONFIGURAÇÕES DE REDE ---
 const char *ssid = "";
@@ -9,28 +12,26 @@ const char *password = "";
 const char *mqtt_server = "";
 const char *mqtt_user = "";
 const char *mqtt_password = "";
-const char *topic_dashboard = "teste/arduino";
+const char *topic_dashboard = "dashboard/traffic_control";
 const char *client_id = "TrafficController_ESP32";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// --- PINOS ---
-const int PIN_A_S1 = 23, PIN_A_S2 = 22, PIN_A_S3 = 21;
-const int PIN_B_S1 = 34, PIN_B_S2 = 35, PIN_B_S3 = 32;
+const int PIN_A_S1 = 23, PIN_A_S2 = 22, PIN_A_S3 = 21; // PIN_A_S1 usado para contagem ISR
+const int PIN_B_S1 = 34, PIN_B_S2 = 35, PIN_B_S3 = 32; // PIN_B_S1 usado para contagem ISR (INVERTIDO)
 const int PIN_BTN_S1 = 14; 
 const int PIN_BTN_S2 = 12; 
 
-// --- TEMPOS (ms) ---
-// Tempos dinâmicos para o Verde
 const long T_LIVRE_MIN = 3000;    
 const long T_LEVE = 4000;         
 const long T_MODERADO = 7000;     
-const long T_INTENSO = 10000;     // Máximo de 10s conforme solicitado
+const long T_INTENSO = 10000;     
 
 const long TEMPO_AMARELO = 2000;     
 const long TEMPO_PEDESTRE = 5000;    
 const long INTERVALO_MQTT = 1000;    
+const long DEBOUNCE_TIME_ISR = 200; // Tempo mínimo entre contagens (200ms)
 
 enum EstadoSinal { 
   S1_VERDE, 
@@ -42,21 +43,49 @@ enum EstadoSinal {
 
 EstadoSinal estadoAtual = S1_VERDE;
 
-// --- MEMÓRIA ANTI-STARVATION ---
-// Guarda quem foi o último a ter o sinal verde para forçar a vez do outro
 EstadoSinal ultimoVerde = S1_VERDE; 
-
 unsigned long tempoUltimaTroca = 0;
 unsigned long tempoUltimaPublicacao = 0;
+unsigned long lastPedestrePressTime = 0;
 bool pedestreAtivo = false;
-
 int trafegoA = 0;
 int trafegoB = 0;
+
+volatile long carCounter_A_ISR = 0;
+volatile long carCounter_B_ISR = 0;
+volatile unsigned long last_ISR_A = 0;
+volatile unsigned long last_ISR_B = 0;
+
+volatile bool contagemAtivaA = false;
+volatile bool contagemAtivaB = false;
+
+void IRAM_ATTR detectaCarroA() {
+    if (contagemAtivaA) {
+        unsigned long now = millis();
+        if (now - last_ISR_A > DEBOUNCE_TIME_ISR) {
+            carCounter_A_ISR++;
+            last_ISR_A = now;
+        }
+    }
+}
+
+void IRAM_ATTR detectaCarroB() {
+    if (contagemAtivaB) {
+        unsigned long now = millis();
+        if (now - last_ISR_B > DEBOUNCE_TIME_ISR) {
+            carCounter_B_ISR++;
+            last_ISR_B = now;
+        }
+    }
+}
 
 void setup_wifi() {
   Serial.print("Conectando WiFi...");
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  while (WiFi.status() != WL_CONNECTED) { 
+    delay(500); Serial.print("."); 
+    esp_task_wdt_reset();
+  }
   Serial.println("\nWiFi Conectado!");
 }
 
@@ -78,7 +107,7 @@ int calculateTrafficLevel(int p1, int p2, int p3, int invertedIRPin = -1) {
 
 void updateSensorInformation() {
   trafegoA = calculateTrafficLevel(PIN_A_S1, PIN_A_S2, PIN_A_S3);
-  trafegoB = calculateTrafficLevel(PIN_B_S1, PIN_B_S2, PIN_B_S3, PIN_B_S1);
+  trafegoB = calculateTrafficLevel(PIN_B_S1, PIN_B_S2, PIN_B_S3, PIN_B_S3);
 }
 
 long calcularTempoVerde(int nivelTransito) {
@@ -97,6 +126,12 @@ String translateTrafficLevel(int nivel) {
 
 void sendMQTTState(bool pedestreAtivo = false) {
   StaticJsonDocument<256> doc;
+  
+  noInterrupts();
+  long totalA = carCounter_A_ISR;
+  long totalB = carCounter_B_ISR;
+  interrupts();
+  
   switch(estadoAtual) {
     case S1_VERDE: doc["estado"] = "S1_VERDE"; break;
     case S1_AMARELO: doc["estado"] = "S1_AMARELO"; break;
@@ -109,7 +144,12 @@ void sendMQTTState(bool pedestreAtivo = false) {
   else doc["transito"] = "LIVRE"; 
   
   doc["ambulancia"] = false;
-  doc["pedestre"] = pedestreAtivo; 
+  doc["pedestre"] = pedestreAtivo;
+  
+  doc["carros_total"] = totalA + totalB;
+  doc["carros_A"] = totalA;
+  doc["carros_B"] = totalB; 
+
   char buffer[256];
   serializeJson(doc, buffer);
   client.publish(topic_dashboard, buffer);
@@ -118,14 +158,26 @@ void sendMQTTState(bool pedestreAtivo = false) {
 void mudarPara(EstadoSinal novoEstado, bool porPedestre = false) {
   estadoAtual = novoEstado;
   tempoUltimaTroca = millis();
+  
+  contagemAtivaA = (novoEstado == S1_VERDE);
+  contagemAtivaB = (novoEstado == S2_VERDE);
+
   sendMQTTState(porPedestre); 
 }
 
 void setup() {
   Serial.begin(9600);
+
+  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_add(NULL);
+
   pinMode(PIN_A_S1, INPUT); pinMode(PIN_A_S2, INPUT); pinMode(PIN_A_S3, INPUT);
   pinMode(PIN_B_S1, INPUT); pinMode(PIN_B_S2, INPUT); pinMode(PIN_B_S3, INPUT);
   pinMode(PIN_BTN_S1, INPUT_PULLUP); pinMode(PIN_BTN_S2, INPUT_PULLUP);
+  
+  attachInterrupt(digitalPinToInterrupt(PIN_A_S1), detectaCarroA, FALLING); 
+  attachInterrupt(digitalPinToInterrupt(PIN_B_S1), detectaCarroB, FALLING); 
+
   setup_wifi();
   client.setServer(mqtt_server, 1883);
   updateSensorInformation();
@@ -135,32 +187,36 @@ void setup() {
 }
 
 void loop() {
-  if (!client.connected()) reconnect();
-  client.loop(); 
-  unsigned long agora = millis();
+  esp_task_wdt_reset();
 
+  if (!client.connected()){ 
+    reconnect();
+  }
+
+  client.loop(); 
+  
+  unsigned long timeNow = millis();
+  
+  // REMOVIDO: delay(1000) de debounce e anti-starvation para evitar travamento do WDT
   bool pedestreEmS1 = digitalRead(PIN_BTN_S1) == LOW; 
   bool pedestreEmS2 = digitalRead(PIN_BTN_S2) == LOW; 
-  if (pedestreEmS1) Serial.println("DEBUG: Btn S1");
-  if (pedestreEmS2) Serial.println("DEBUG: Btn S2");
 
   switch (estadoAtual) {
     case S1_VERDE:
-      if (pedestreEmS1) {
-         Serial.println("Pedestre S1 -> Amarelo");
-         delay(1000); 
+      // Ação de Pedestre (Anti-debounce usando tempo)
+      if (pedestreEmS1 && (timeNow - lastPedestrePressTime > 10000)) {
          ultimoVerde = S1_VERDE;
          pedestreAtivo = true;
+         lastPedestrePressTime = timeNow;
          mudarPara(S1_AMARELO, true);
-      }
-      else {
+      } else {
          updateSensorInformation();
          long tempoLimite = calcularTempoVerde(trafegoA);
-
-         if (agora - tempoUltimaTroca >= tempoLimite) {
+         Serial.printf("S1 VERDE. Tráfego: %d. Limite: %ldms\n", trafegoA, tempoLimite);
+         // carCounter += trafegoA; // REMOVIDO: Contagem feita por ISR
+         if (timeNow - tempoUltimaTroca >= tempoLimite) {
              if (trafegoB > 0) {
-                 Serial.println("Tempo S1 acabou. S2 tem fila. Trocando.");
-                 ultimoVerde = S1_VERDE; // Memoriza
+                 ultimoVerde = S1_VERDE; 
                  mudarPara(S1_AMARELO, false);
              } 
          }
@@ -168,29 +224,29 @@ void loop() {
       break;
 
     case S1_AMARELO:
-      if (agora - tempoUltimaTroca >= TEMPO_AMARELO) {
+      if (timeNow - tempoUltimaTroca >= TEMPO_AMARELO) {
         mudarPara(VERMELHO_PEDESTRE);
       }
       break;
 
-    // === SINAL 2 VERDE ===
     case S2_VERDE:
-      if (pedestreEmS2) {
+      // Ação de Pedestre (Anti-debounce usando tempo)
+      if (pedestreEmS2 && (timeNow - lastPedestrePressTime > 10000)) {
          Serial.println("Pedestre S2 -> Amarelo");
-         delay(1000); 
-         ultimoVerde = S2_VERDE; // Memoriza quem estava verde
+         ultimoVerde = S2_VERDE; 
          pedestreAtivo = true;
+         lastPedestrePressTime = timeNow;
          mudarPara(S2_AMARELO, true);
       }
       else {
          updateSensorInformation();
          long tempoLimite = calcularTempoVerde(trafegoB);
-
-         // Lógica Anti-Starvation na Saída do Verde
-         if (agora - tempoUltimaTroca >= tempoLimite) {
+         Serial.printf("S2 VERDE. Tráfego: %d. Limite: %ldms\n", trafegoB, tempoLimite);
+         // carCounter += trafegoB; // REMOVIDO: Contagem feita por ISR
+         if (timeNow - tempoUltimaTroca >= tempoLimite) {
              if (trafegoA > 0) {
                  Serial.println("Tempo S2 acabou. S1 tem fila. Trocando.");
-                 ultimoVerde = S2_VERDE; // Memoriza
+                 ultimoVerde = S2_VERDE; 
                  mudarPara(S2_AMARELO, false);
              }
          }
@@ -198,22 +254,25 @@ void loop() {
       break;
 
     case S2_AMARELO:
-      if (agora - tempoUltimaTroca >= TEMPO_AMARELO) mudarPara(VERMELHO_PEDESTRE);
+      if (timeNow - tempoUltimaTroca >= TEMPO_AMARELO) mudarPara(VERMELHO_PEDESTRE);
       break;
 
     case VERMELHO_PEDESTRE:
-      if (agora - tempoUltimaTroca >= TEMPO_PEDESTRE) {
+      if (timeNow - tempoUltimaTroca >= TEMPO_PEDESTRE) {
         updateSensorInformation(); 
         Serial.println("Fim do Vermelho Total. Decidindo...");
 
-        if (ultimoVerde == S1_VERDE) {
-            if (pedestreAtivo) {
-                Serial.println("Pedestre recente em S1. Mantém S1.");
-                mudarPara(S1_VERDE, true);
-                pedestreAtivo = false; 
-                return;
-            }
+        // Lógica de Anti-Starvation e Prioridade de Pedestre
+        if (pedestreAtivo) {
+            EstadoSinal proximoEstado = (ultimoVerde == S1_VERDE) ? S1_VERDE : S2_VERDE;
+            Serial.printf("Pedestre recente em S%d. Mantém Verde.\n", (proximoEstado == S1_VERDE ? 1 : 2));
+            mudarPara(proximoEstado, true);
+            pedestreAtivo = false;
+            return;
+        }
 
+        // Se S1 foi o último, é a vez de S2
+        if (ultimoVerde == S1_VERDE) {
             if (trafegoB > 0) {
                 Serial.println("Vez do S2 (Rotação).");
                 mudarPara(S2_VERDE);
@@ -222,14 +281,8 @@ void loop() {
                 mudarPara(S1_VERDE);
             }
         } 
+        // Se S2 foi o último, é a vez de S1
         else {
-          if (pedestreAtivo) {
-                Serial.println("Pedestre recente em S2. Mantém S2.");
-                mudarPara(S2_VERDE, true);
-                pedestreAtivo = false; 
-                return;
-            }
-          
           if (trafegoA > 0) {
                 Serial.println("Vez do S1 (Rotação).");
                 mudarPara(S1_VERDE);
@@ -242,9 +295,9 @@ void loop() {
       break;
   }
 
-  if (agora - tempoUltimaPublicacao >= INTERVALO_MQTT) {
+  if (timeNow - tempoUltimaPublicacao >= INTERVALO_MQTT) {
     updateSensorInformation();
     sendMQTTState(false); 
-    tempoUltimaPublicacao = agora;
+    tempoUltimaPublicacao = timeNow;
   }
 }
